@@ -15,18 +15,24 @@ use rand::prelude::*;
 use std::f32::consts::PI;
 use std::time::Duration;
 
+#[derive(Resource)]
+pub struct Config {
+    pub orfs_to_pop_per_step: usize,
+}
+
+
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         // .add_plugins(WorldInspectorPlugin::new())
         .add_plugins(PhysicsPlugins::default())
-        .insert_resource(Gravity(Vec3::new(0.0, 0.0, 0.0)))
-        .insert_resource(SubstepCount(2))
+        .insert_resource(Gravity(Vec3::new(0.0, -0.2, -0.3)))
+        .insert_resource(SubstepCount(8))
         .add_systems(Startup, startup_data)
         // .add_systems(Startup, setup)
         // .add_systems(Update, roll)
-        .add_systems(Update, pop_random_orf)
-                .insert_resource(SubstepCount(30))
+        // .add_systems(Update, pop_random_orf)
+        .add_systems(Update, pop_orf_from_the_end_spiral_animation)
         // .add_systems(PostUpdate, despawn_when_off_screen.after(VisibilitySystems::CheckVisibility))
         .run();
 }
@@ -115,6 +121,73 @@ pub fn pop_random_orf(
     }
 }
 
+#[derive(Resource)]
+pub struct OrfNumber(usize);
+
+pub fn pop_orf_from_the_end_spiral_animation (
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut orfs: ResMut<Orfs>,
+    time: Res<Time>,
+    mut orf_number: ResMut<OrfNumber>,
+    config: Res<Config>,
+) {
+    orfs.timer.tick(time.delta());
+
+    if orfs.timer.finished() {
+        // Pop the last orf
+        // NOT doing random at this stage
+
+        for _ in 0..config.orfs_to_pop_per_step {
+
+            let orf = match orfs.orfs.pop() {
+                None => return,
+                Some(orf) => orf
+            };
+
+            let orf_length = orf.end - orf.start;
+            let size = 0.1_f32.max(orf_length as f32 / 1_000_000.0);
+
+            let cylinder = meshes.add(Cylinder::new(0.1, size));
+            let color = materials.add(StandardMaterial {
+                base_color: Color::CYAN,
+                ..default()
+            });
+
+            // Each orf shoots off in a spiral from the end of the chromosome, based
+            // on which number it is in the list determines the proper angle
+            let angle = orf_number.0 as f32 * 0.1;
+            orf_number.0 += 1;
+
+            let velocity = Vec3::new(
+                0.0,
+                angle.cos() * 6.0,
+                angle.sin() * 6.0
+            );
+
+            // Place it at the start of the orf on the chromosome (chromosome is centered 0,0,0, length is in orfs.chromosome_length)
+            // Because it is centered, those left of the center will be negative in x
+            let x = (orf.start as f32 - orfs.chromosome_length as f32 / 2.0) / 1_000_000.0;
+
+            commands.spawn((
+                RigidBody::Dynamic,
+                // Collider::cylinder(0.1, size),
+                MassPropertiesBundle::new_computed(&Collider::cylinder(0.1, size), 2.5),
+                LinearVelocity(velocity),
+                PbrBundle {
+                    mesh: cylinder,
+                    material: color,
+                    transform: Transform::from_xyz(x, 0.0, 0.0)
+                        .with_rotation(Quat::from_rotation_z(-PI / 2.)),
+                    ..default()
+                },
+                OrfInSpace,
+            ));
+        }
+    }
+}
+
 pub fn startup_data(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -186,6 +259,10 @@ pub fn startup_data(
         random_list,
     };
     commands.insert_resource(orfs);
+    commands.insert_resource(OrfNumber(0));
+    commands.insert_resource(Config {
+        orfs_to_pop_per_step: 5,
+    });
 }
 
 /// A marker component for our shapes so we can query them separately from the ground plane
