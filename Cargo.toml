@@ -1,0 +1,21 @@
+[package]
+name = "explode_orfs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.13"
+bevy-inspector-egui = "0.23.4"
+ffforf = "0.2.0"
+needletail = "0.5.1"
+bevy_xpbd_3d = {version = "0.4", features=["simd", "parallel"]}
+rand = "0.8.5"
+
+
+# Enable a small amount of optimization in debug mode
+[profile.dev]
+opt-level = 1
+
+# Enable high optimizations for dependencies (incl. Bevy), but not for our code:
+[profile.dev.package."*"]
+opt-level = 3
