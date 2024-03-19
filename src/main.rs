@@ -14,10 +14,14 @@ use rand::prelude::*;
 
 use std::f32::consts::PI;
 use std::time::Duration;
+use std::collections::VecDeque;
 
 #[derive(Resource)]
 pub struct Config {
     pub orfs_to_pop_per_step: usize,
+    pub orf_material: Handle<StandardMaterial>,
+    pub orf_length_max: usize,
+    pub orf_length_min: usize,
 }
 
 
@@ -26,14 +30,14 @@ fn main() {
         .add_plugins(DefaultPlugins.set(ImagePlugin::default_nearest()))
         // .add_plugins(WorldInspectorPlugin::new())
         .add_plugins(PhysicsPlugins::default())
-        .insert_resource(Gravity(Vec3::new(0.0, -0.2, -0.3)))
-        .insert_resource(SubstepCount(8))
+        .insert_resource(Gravity(Vec3::new(0.0, 0.0, 0.0)))
+        .insert_resource(SubstepCount(3))
         .add_systems(Startup, startup_data)
         // .add_systems(Startup, setup)
         // .add_systems(Update, roll)
-        // .add_systems(Update, pop_random_orf)
+        //.add_systems(Update, pop_random_orf)
         .add_systems(Update, pop_orf_from_the_end_spiral_animation)
-        // .add_systems(PostUpdate, despawn_when_off_screen.after(VisibilitySystems::CheckVisibility))
+        .add_systems(PostUpdate, despawn_when_off_screen.after(VisibilitySystems::CheckVisibility))
         .run();
 }
 
@@ -46,14 +50,13 @@ pub fn despawn_when_off_screen(
         if !view_visibility.get() {
             // If it's not visible, despawn it
             commands.entity(entity).despawn_recursive();
-            println!("Despawning entity: {:?}", entity);
         }
     }
 }
 
 #[derive(Resource)]
 pub struct Orfs {
-    orfs: Vec<Orf>,
+    orfs: VecDeque<Orf>,
     timer: Timer,
     chromosome_length: usize,
     random_list: Vec<usize>,
@@ -68,6 +71,7 @@ pub fn pop_random_orf(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut orfs: ResMut<Orfs>,
     time: Res<Time>,
+    config: Res<Config>,
 ) {
     orfs.timer.tick(time.delta());
 
@@ -85,10 +89,6 @@ pub fn pop_random_orf(
         let size = 0.1_f32.max(orf_length as f32 / 1_000_000.0);
 
         let cylinder = meshes.add(Cylinder::new(0.1, size));
-        let color = materials.add(StandardMaterial {
-            base_color: Color::CYAN,
-            ..default()
-        });
 
         let mut rng = rand::thread_rng();
 
@@ -111,7 +111,7 @@ pub fn pop_random_orf(
             LinearVelocity(velocity),
             PbrBundle {
                 mesh: cylinder,
-                material: color,
+                material: config.orf_material.clone(),
                 transform: Transform::from_xyz(x, 0.0, 0.0)
                     .with_rotation(Quat::from_rotation_z(-PI / 2.)),
                 ..default()
@@ -139,19 +139,29 @@ pub fn pop_orf_from_the_end_spiral_animation (
         // Pop the last orf
         // NOT doing random at this stage
 
-        for _ in 0..config.orfs_to_pop_per_step {
+        let mut front = false;
 
-            let orf = match orfs.orfs.pop() {
+        for _ in 0..config.orfs_to_pop_per_step {
+            let orf = if front {
+                // front = !front;
+                orfs.orfs.pop_front()
+            } else {
+                // front = !front;
+                orfs.orfs.pop_back()
+            };
+
+            let orf = match orf {
                 None => return,
                 Some(orf) => orf
             };
 
             let orf_length = orf.end - orf.start;
-            let size = 0.1_f32.max(orf_length as f32 / 1_000_000.0);
+            let size = (orf_length as f32 / config.orf_length_max as f32) * 2.0 + 0.1;
+            let color = Color::CYAN;
 
-            let cylinder = meshes.add(Cylinder::new(0.1, size));
+            let cylinder = meshes.add(Cylinder::new(0.15, size));
             let color = materials.add(StandardMaterial {
-                base_color: Color::CYAN,
+                base_color: color,
                 ..default()
             });
 
@@ -246,22 +256,38 @@ pub fn startup_data(
 
     // Let's pull out all the ORFs for display later... save as a resource right now...
 
-
-    let all_orfs = find_all_orfs(&seq, 50);
+    let mut all_orfs = find_all_orfs(&seq, 100);
+    all_orfs.sort_by(|a, b| a.start.cmp(&b.start));
     let mut random_list = (0..all_orfs.len()).collect::<Vec<usize>>();
     let mut rng = rand::thread_rng();
     random_list.as_mut_slice().shuffle(&mut rng);
 
+    // Calc orf lengths so we can get the min and max
+    let mut orf_lengths = all_orfs.iter().map(|orf| orf.end - orf.start).collect::<Vec<usize>>();
+    let orf_length_max = orf_lengths.iter().max().unwrap();
+    let orf_length_min = orf_lengths.iter().min().unwrap();
+
+
     let orfs = Orfs {
-        orfs: all_orfs,
+        orfs: all_orfs.into(),
         timer: Timer::new(Duration::from_secs(5), TimerMode::Once),
         chromosome_length: sequence_length,
         random_list,
     };
+
     commands.insert_resource(orfs);
     commands.insert_resource(OrfNumber(0));
+
+    let color = materials.add(StandardMaterial {
+        base_color: Color::CYAN,
+        ..default()
+    });
+
     commands.insert_resource(Config {
-        orfs_to_pop_per_step: 5,
+        orfs_to_pop_per_step: 28,
+        orf_material: color,
+        orf_length_max: *orf_length_max,
+        orf_length_min: *orf_length_min,
     });
 }
 
