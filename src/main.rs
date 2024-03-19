@@ -38,7 +38,14 @@ fn main() {
         //.add_systems(Update, pop_random_orf)
         .add_systems(Update, pop_orf_from_the_end_spiral_animation)
         .add_systems(PostUpdate, despawn_when_off_screen.after(VisibilitySystems::CheckVisibility))
+        .add_systems(PreUpdate, file_drag_and_drop_system)
         .run();
+}
+
+fn file_drag_and_drop_system(mut events: EventReader<FileDragAndDrop>) {
+    for event in events.read() {
+        info!("{:?}", event);
+    }
 }
 
 // Despawn when off screen (not visible)
@@ -270,7 +277,7 @@ pub fn startup_data(
 
     let orfs = Orfs {
         orfs: all_orfs.into(),
-        timer: Timer::new(Duration::from_secs(5), TimerMode::Once),
+        timer: Timer::new(Duration::from_secs(10), TimerMode::Once),
         chromosome_length: sequence_length,
         random_list,
     };
