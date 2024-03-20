@@ -33,8 +33,28 @@ pub struct Config {
     pub orf_material: Handle<StandardMaterial>,
     pub orf_length_max: usize,
     pub orf_length_min: usize,
+    pub min_orf_length: usize,
     pub culling: usize,
     pub genome: Genome,
+    pub speed_scale: f32,
+    pub orf_color: Color,
+}
+
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            orfs_to_pop_per_step: 28,
+            orf_material: Handle::default(),
+            orf_length_max: usize::MAX,
+            orf_length_min: 0,
+            min_orf_length: 100,
+            culling: 2000,
+            genome: Genome::Nasonia,
+            speed_scale: 6.0,
+            orf_color: Color::CYAN,
+        }
+    }
 }
 
 pub enum Genome {
@@ -52,18 +72,6 @@ impl PartialEq for Genome {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            orfs_to_pop_per_step: 28,
-            orf_material: Handle::default(),
-            orf_length_max: usize::MAX,
-            orf_length_min: 100,
-            culling: 2000,
-            genome: Genome::Nasonia,
-        }
-    }
-}
 
 fn main() {
     App::new()
@@ -87,6 +95,7 @@ fn main() {
         .insert_resource(Config::default())
         .insert_resource(Gravity(Vec3::new(0.0, 0.0, 0.0)))
         .insert_resource(SubstepCount(2))
+        .insert_resource(Orfs::default())
         .add_systems(Update, gui.run_if(in_state(AppState::Menu)))
         .add_systems(OnEnter(AppState::Run), startup_data)
         .add_systems(
@@ -95,9 +104,7 @@ fn main() {
         )
         .add_systems(
             PostUpdate,
-            cull.after(VisibilitySystems::CheckVisibility)
-                .run_if(in_state(AppState::Run)),
-        )
+            cull.after(VisibilitySystems::CheckVisibility))
         .init_state::<AppState>()
         .run();
 }
@@ -117,6 +124,7 @@ pub fn gui(
     mut commands: Commands,
     mut app_state: ResMut<NextState<AppState>>,
     mut task_executor: AsyncTaskRunner<Vec<u8>>,
+    mut orfs: ResMut<Orfs>,
 ) {
     egui::Window::new("Settings")        
         .default_width(400.0)
@@ -131,7 +139,8 @@ pub fn gui(
 
         // If custom, have an upload button
         if let Genome::Custom(_) = config.genome {
-            ui.label("Uploads may be plain fasta or gzip'd");
+            ui.label("Uploads may be plain fasta or gzip'd.");
+            ui.label("NOTE: Only the first sequence in the file will be used.");
             if ui.button("Upload").clicked() {
                 task_executor.start(async {
                     let task = AsyncFileDialog::new()
@@ -141,7 +150,6 @@ pub fn gui(
                         let file_handle = task.await.unwrap();
                         let file = file_handle.read().await;
                         return file
-
                 });
             }
         }
@@ -158,12 +166,12 @@ pub fn gui(
         // Min orf size
         ui.horizontal(|ui| {
             ui.label("Min orf size");
-            ui.add(egui::Slider::new(&mut config.orf_length_min, 1..=1000));
+            ui.add(egui::Slider::new(&mut config.min_orf_length, 1..=1000));
         });
 
         // if orf_length_min < 50, issue a warning
-        if config.orf_length_min < 50 {
-            ui.label("Gonna be fun! orf length is less than 50 - It'll be slow");
+        if config.min_orf_length < 50 {
+            ui.label("orf length is less than 50 - It'll be slow");
         }
 
         // Culling
@@ -184,6 +192,20 @@ pub fn gui(
         });
         ui.label("Increases the density of the ORF cloud");
 
+        // Speed scale
+        ui.horizontal(|ui| {
+            ui.label("Speed scale");
+            ui.add(egui::Slider::new(&mut config.speed_scale, 1.0..=10.0));
+        });
+
+        // Orf color
+        ui.horizontal(|ui| {
+            ui.label("Orf color");
+            let mut color = config.orf_color.as_rgba_f32();
+            ui.color_edit_button_rgba_unmultiplied(&mut color);
+            config.orf_color = Color::rgba(color[0], color[1], color[2], color[3]);
+        });
+
         // Reset button
         if ui.button("Reset").clicked() {
             commands.insert_resource(Config::default());
@@ -195,6 +217,8 @@ pub fn gui(
             }
         }
 
+        ui.label("Note! Once animation is finished, after a few seconds, you will be returned to the menu");
+
         // Start button
         if ui.button("Start").clicked() {
             // If genome data is not nasonia and is empty, don't start
@@ -203,6 +227,12 @@ pub fn gui(
                     return;
                 }
             }
+
+            // Despawn all current orfs
+            for e in orfs.entities.drain(..) {
+                commands.entity(e).despawn_recursive();
+            }
+           
             app_state.set(AppState::Run);
         }
     });
@@ -218,7 +248,10 @@ pub fn cull(
     for (entity, view_visibility) in query.iter() {
         if !view_visibility.get() {
             // If it's not visible, despawn it
+            // Remove from the list
+            orfs.entities.retain(|e| *e != entity);
             commands.entity(entity).despawn_recursive();
+
         }
     }
 
@@ -233,7 +266,7 @@ pub fn cull(
     }
 }
 
-#[derive(Resource)]
+#[derive(Resource, Default)]
 pub struct Orfs {
     orfs: VecDeque<Orf>,
     timer: Timer,
@@ -256,10 +289,15 @@ pub fn pop_orf_from_the_end_spiral_animation(
     time: Res<Time>,
     mut orf_number: ResMut<OrfNumber>,
     config: Res<Config>,
+    mut app_state: ResMut<NextState<AppState>>,
 ) {
     orfs.timer.tick(time.delta());
 
-    if orfs.timer.finished() {
+    if orfs.timer.finished() && orfs.orfs.is_empty() {
+        app_state.set(AppState::Menu);
+    }
+
+    if orfs.timer.finished() && orfs.orfs.len() > 0 {
         // Pop the last orf
         // NOT doing random at this stage
 
@@ -275,13 +313,17 @@ pub fn pop_orf_from_the_end_spiral_animation(
             };
 
             let orf = match orf {
-                None => return,
+                None => {
+                    // Start a new timer
+                    orfs.timer.reset();
+                    return
+                },
                 Some(orf) => orf,
             };
 
             let orf_length = orf.end - orf.start;
             let size = (orf_length as f32 / config.orf_length_max as f32) * 2.0 + 0.1;
-            let color = Color::CYAN;
+            let color = config.orf_color;
 
             let cylinder = meshes.add(Cylinder::new(0.15, size));
             let color = materials.add(StandardMaterial {
@@ -294,7 +336,7 @@ pub fn pop_orf_from_the_end_spiral_animation(
             let angle = orf_number.0 as f32 * 0.1;
             orf_number.0 += 1;
 
-            let velocity = Vec3::new(0.0, angle.cos() * 6.0, angle.sin() * 6.0);
+            let velocity = Vec3::new(0.0, angle.cos() * config.speed_scale, angle.sin() * config.speed_scale);
 
             // Place it at the start of the orf on the chromosome (chromosome is centered 0,0,0, length is in orfs.chromosome_length)
             // Because it is centered, those left of the center will be negative in x
@@ -334,10 +376,21 @@ pub fn startup_data(
         point_light: PointLight {
             shadows_enabled: true,
             intensity: 10_000_000.,
-            range: 100.0,
+            range: 1000.0,
             ..default()
         },
         transform: Transform::from_xyz(8.0, 16.0, 8.0),
+        ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            shadows_enabled: true,
+            intensity: 10_000_000.,
+            range: 1000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(-8.0, 16.0, 8.0),
         ..default()
     });
 
@@ -396,7 +449,7 @@ pub fn startup_data(
 
     // Let's pull out all the ORFs for display later... save as a resource right now...
 
-    let orf_min = config.orf_length_min;
+    let orf_min = config.min_orf_length;
 
     let mut all_orfs = find_all_orfs(&seq, orf_min);
     all_orfs.sort_by(|a, b| a.start.cmp(&b.start));
